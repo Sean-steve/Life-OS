@@ -1,0 +1,611 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ============================================
+// CORE USER & AUTH
+// ============================================
+
+model User {
+  id                    String    @id @default(cuid())
+  email                 String    @unique
+  name                  String
+  password              String
+  avatar                String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  // Relations
+  missions              Mission[]
+  kpis                  KPI[]
+  resources             Resource[]
+  decisions             Decision[]
+  companies             Company[]
+  sessions              Session[]
+  aiReports             AICEOReport[]
+  familyMembers         FamilyMember[]
+  assets                Asset[]
+  legacyEvents          LegacyEvent[]
+  
+  @@index([email])
+}
+
+model Session {
+  id                    String    @id @default(cuid())
+  userId                String
+  token                 String    @unique
+  expiresAt             DateTime
+  createdAt             DateTime  @default(now())
+  
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+}
+
+// ============================================
+// 1. MISSION ENGINE
+// ============================================
+
+enum MissionStatus {
+  IDEA
+  QUEUED
+  ACTIVE
+  BLOCKED
+  AT_RISK
+  COMPLETED
+  ARCHIVED
+}
+
+enum MissionCategory {
+  ME
+  FAMILY
+  BUSINESS
+  FINANCE
+  HEALTH
+  SPIRITUAL
+  ASSETS
+  LEGACY
+}
+
+enum MissionPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model Mission {
+  id                    String    @id @default(cuid())
+  userId                String
+  title                 String
+  description           String?
+  category              MissionCategory
+  priority              MissionPriority @default(MEDIUM)
+  status                MissionStatus @default(IDEA)
+  startDate             DateTime?
+  targetDate            DateTime?
+  completedDate         DateTime?
+  successDefinition     String?
+  impactScore           Int       @default(0) // 0-100
+  roiScore              Float     @default(0)
+  estimatedHours        Int       @default(0)
+  estimatedCost         Float     @default(0)
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  // Relations
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dependencies          MissionDependency[] @relation("dependsOn")
+  dependents            MissionDependency[] @relation("dependentOf")
+  objectives            Objective[]
+  resources             Resource[]
+  weeklyEvents          WeeklyEvent[]
+  dailyActions          DailyAction[]
+  kpis                  KPI[]
+  
+  @@index([userId, status])
+  @@index([userId, category])
+  @@index([targetDate])
+}
+
+model MissionDependency {
+  id                    String    @id @default(cuid())
+  missionId             String
+  dependsOnMissionId    String
+  status                String    @default("pending") // pending, active, completed
+  createdAt             DateTime  @default(now())
+  
+  mission               Mission   @relation("dependsOn", fields: [missionId], references: [id], onDelete: Cascade)
+  dependsOnMission      Mission   @relation("dependentOf", fields: [dependsOnMissionId], references: [id], onDelete: Cascade)
+  
+  @@unique([missionId, dependsOnMissionId])
+  @@index([missionId])
+  @@index([dependsOnMissionId])
+}
+
+// ============================================
+// 2. MILESTONES & OBJECTIVES
+// ============================================
+
+model Objective {
+  id                    String    @id @default(cuid())
+  missionId             String
+  title                 String
+  description           String?
+  status                String    @default("pending") // pending, in_progress, completed
+  dueDate               DateTime?
+  order                 Int       @default(0)
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  mission               Mission   @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  keyResults            KeyResult[]
+  
+  @@index([missionId])
+  @@index([status])
+}
+
+model KeyResult {
+  id                    String    @id @default(cuid())
+  objectiveId           String
+  title                 String
+  targetValue           Float
+  currentValue          Float     @default(0)
+  unit                  String    // %, $, count, etc
+  status                String    @default("pending")
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  objective             Objective @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+  
+  @@index([objectiveId])
+}
+
+// ============================================
+// 3. WEEKLY SPRINTS & DAILY ACTIONS
+// ============================================
+
+model WeeklyEvent {
+  id                    String    @id @default(cuid())
+  missionId             String
+  weekStartDate         DateTime
+  weekEndDate           DateTime
+  focus                 String    // Weekly theme/focus
+  plannedHours          Int       @default(0)
+  completedHours        Int       @default(0)
+  status                String    @default("planning") // planning, active, completed
+  notes                 String?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  mission               Mission   @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  
+  @@index([missionId])
+  @@index([weekStartDate])
+}
+
+model DailyAction {
+  id                    String    @id @default(cuid())
+  missionId             String
+  date                  DateTime
+  title                 String
+  description           String?
+  estimatedMinutes      Int       @default(30)
+  actualMinutes         Int?
+  status                String    @default("pending") // pending, in_progress, completed
+  priority              MissionPriority @default(MEDIUM)
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  mission               Mission   @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  
+  @@index([missionId, date])
+  @@index([status])
+}
+
+// ============================================
+// 4. RESOURCE ALLOCATION ENGINE
+// ============================================
+
+enum ResourceType {
+  HOURS
+  CAPITAL
+  EXPERTISE
+  TOOLS
+}
+
+model Resource {
+  id                    String    @id @default(cuid())
+  userId                String
+  missionId             String
+  type                  ResourceType
+  category              String    // Family, Business, Health, etc
+  allocatedAmount       Float
+  usedAmount            Float     @default(0)
+  unit                  String    // hours, $, etc
+  weekStartDate         DateTime?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mission               Mission   @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([missionId])
+  @@index([weekStartDate])
+}
+
+// ============================================
+// 5. KPI CENTER
+// ============================================
+
+enum KPIType {
+  FINANCIAL
+  BUSINESS
+  HEALTH
+  FAMILY
+  SPIRITUAL
+}
+
+model KPI {
+  id                    String    @id @default(cuid())
+  userId                String
+  missionId             String?
+  name                  String
+  type                  KPIType
+  category              String    // Income, Weight, Baby Readiness, etc
+  currentValue          Float     @default(0)
+  targetValue           Float?
+  unit                  String    // $, kg, score, etc
+  frequency             String    @default("weekly") // daily, weekly, monthly, quarterly, yearly
+  lastUpdated           DateTime  @default(now())
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mission               Mission?  @relation(fields: [missionId], references: [id], onDelete: SetNull)
+  dataPoints            KPIDataPoint[]
+  
+  @@index([userId, type])
+  @@index([lastUpdated])
+}
+
+model KPIDataPoint {
+  id                    String    @id @default(cuid())
+  kpiId                 String
+  value                 Float
+  date                  DateTime  @default(now())
+  notes                 String?
+  
+  kpi                   KPI       @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  
+  @@index([kpiId, date])
+}
+
+// ============================================
+// 6. COMPANY/BUSINESS OS
+// ============================================
+
+model Company {
+  id                    String    @id @default(cuid())
+  userId                String
+  name                  String
+  description           String?
+  type                  String    // SaaS, Real Estate, Agency, etc
+  status                String    @default("active")
+  foundedDate           DateTime?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projects              CompanyProject[]
+  goals                 CompanyGoal[]
+  revenue               CompanyRevenue[]
+  
+  @@index([userId])
+}
+
+model CompanyProject {
+  id                    String    @id @default(cuid())
+  companyId             String
+  name                  String
+  description           String?
+  status                String    @default("planning")
+  startDate             DateTime?
+  dueDate               DateTime?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  company               Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  @@index([companyId])
+}
+
+model CompanyGoal {
+  id                    String    @id @default(cuid())
+  companyId             String
+  title                 String
+  targetValue           Float
+  currentValue          Float     @default(0)
+  unit                  String
+  deadline              DateTime?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  company               Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  @@index([companyId])
+}
+
+model CompanyRevenue {
+  id                    String    @id @default(cuid())
+  companyId             String
+  amount                Float
+  date                  DateTime
+  source                String    // product, service, etc
+  
+  createdAt             DateTime  @default(now())
+  
+  company               Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  @@index([companyId, date])
+}
+
+// ============================================
+// 7. KNOWLEDGE VAULT
+// ============================================
+
+model KnowledgeEntry {
+  id                    String    @id @default(cuid())
+  userId                String
+  title                 String
+  content               String
+  type                  String    // lesson, book_note, insight, meeting_note
+  tags                  String[]  // JSON array
+  linkedEntries         String[]  // JSON array of IDs
+  backlinks             String[]  // JSON array of IDs
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  @@index([userId])
+  @@index([tags])
+}
+
+// ============================================
+// 8. DECISION JOURNAL
+// ============================================
+
+model Decision {
+  id                    String    @id @default(cuid())
+  userId                String
+  title                 String
+  description           String
+  reason                String?
+  expectedOutcome       String?
+  actualOutcome         String?
+  reviewDate            DateTime?
+  reviewedAt            DateTime?
+  confidence            Int       // 0-100
+  impact                String    // low, medium, high
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([reviewedAt])
+}
+
+// ============================================
+// 9. FAMILY COMMAND
+// ============================================
+
+model FamilyMember {
+  id                    String    @id @default(cuid())
+  userId                String
+  name                  String
+  relationship          String    // spouse, child, parent, etc
+  dateOfBirth           DateTime?
+  notes                 String?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+}
+
+model FamilyGoal {
+  id                    String    @id @default(cuid())
+  userId                String
+  title                 String
+  category              String    // baby_prep, education, health, etc
+  status                String    @default("pending")
+  targetDate            DateTime?
+  progress              Int       @default(0) // 0-100
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  @@index([userId])
+}
+
+// ============================================
+// 10. ASSET BUILDER
+// ============================================
+
+enum AssetType {
+  BUSINESS
+  VEHICLE
+  PROPERTY
+  INVESTMENT
+  CASH
+}
+
+model Asset {
+  id                    String    @id @default(cuid())
+  userId                String
+  name                  String
+  type                  AssetType
+  value                 Float
+  description           String?
+  acquiredDate          DateTime?
+  currency              String    @default("USD")
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  valueHistory          AssetValueHistory[]
+  
+  @@index([userId])
+  @@index([type])
+}
+
+model AssetValueHistory {
+  id                    String    @id @default(cuid())
+  assetId               String
+  value                 Float
+  date                  DateTime  @default(now())
+  notes                 String?
+  
+  asset                 Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  
+  @@index([assetId, date])
+}
+
+// ============================================
+// 11. LEGACY LEDGER
+// ============================================
+
+model LegacyEvent {
+  id                    String    @id @default(cuid())
+  userId                String
+  title                 String
+  description           String?
+  date                  DateTime
+  type                  String    // birth, milestone, decision, acquisition, etc
+  significance          Int       // 1-5 importance rating
+  media                 String?   // URL to media
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, date])
+}
+
+// ============================================
+// 12. AI CEO REPORT
+// ============================================
+
+model AICEOReport {
+  id                    String    @id @default(cuid())
+  userId                String
+  weekStartDate         DateTime
+  weekEndDate           DateTime
+  wins                  String?   // JSON array
+  losses                String?
+  risks                 String?
+  opportunities         String?
+  recommendations       String?
+  lifeCapacityScore     Int
+  freedomScore          Int
+  generatedAt           DateTime
+  
+  createdAt             DateTime  @default(now())
+  
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, weekStartDate])
+}
+
+// ============================================
+// 13. FOCUS LOCK & SEASON MODE
+// ============================================
+
+enum SeasonMode {
+  STABILIZATION
+  GROWTH
+  WEALTH_BUILDING
+  LEGACY
+}
+
+model SeasonConfig {
+  id                    String    @id @default(cuid())
+  userId                String
+  currentMode           SeasonMode @default(STABILIZATION)
+  startDate             DateTime
+  endDate               DateTime?
+  priorityMissions      String[]  // JSON array of mission IDs
+  suppressedMissions    String[]  // JSON array of mission IDs
+  allowedCategories     String[]  // JSON array of categories
+  focusStatement        String?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  @@unique([userId, startDate])
+  @@index([userId, startDate])
+}
+
+// ============================================
+// 14. CALENDAR & TIME BLOCKING
+// ============================================
+
+model CalendarEvent {
+  id                    String    @id @default(cuid())
+  userId                String
+  title                 String
+  description           String?
+  startTime             DateTime
+  endTime               DateTime
+  type                  String    // meeting, block, milestone, etc
+  status                String    @default("scheduled") // scheduled, completed, cancelled
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  @@index([userId, startTime])
+}
+
+// ============================================
+// 15. LIFE CAPACITY SCORE
+// ============================================
+
+model LifeCapacityScore {
+  id                    String    @id @default(cuid())
+  userId                String
+  totalScore            Int       // 0-100
+  financialScore        Int       // 30%
+  healthScore           Int       // 20%
+  familyScore           Int       // 20%
+  mentalScore           Int       // 10%
+  spiritualScore        Int       // 10%
+  businessScore         Int       // 10%
+  freedomScore          Int       // 0-100
+  date                  DateTime
+  
+  createdAt             DateTime  @default(now())
+  
+  @@index([userId, date])
+}
