@@ -1,0 +1,26 @@
+{
+  "name": "life-os-v3",
+  "version": "1.0.0",
+  "description": "Build the life you intend. Personal Operating System for managing entire human life.",
+  "private": true,
+  "workspaces": [
+    "apps/backend",
+    "apps/frontend",
+    "packages/shared"
+  ],
+  "scripts": {
+    "dev": "concurrently \"yarn workspace @life-os/backend dev\" \"yarn workspace @life-os/frontend dev\"",
+    "build": "yarn workspace @life-os/backend build && yarn workspace @life-os/frontend build",
+    "test": "yarn workspace @life-os/backend test && yarn workspace @life-os/frontend test",
+    "db:migrate": "yarn workspace @life-os/backend db:migrate",
+    "db:seed": "yarn workspace @life-os/backend db:seed",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\"",
+    "lint": "eslint \"**/*.{ts,tsx}\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0",
+    "eslint": "^8.50.0",
+    "prettier": "^3.0.3",
+    "typescript": "^5.2.2"
+  }
+}
